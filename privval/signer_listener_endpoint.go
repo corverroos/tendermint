@@ -64,7 +64,7 @@ func NewSignerListenerEndpoint(
 
 // OnStart implements service.Service.
 func (sl *SignerListenerEndpoint) OnStart() error {
-	sl.connectRequestCh = make(chan struct{})
+	sl.connectRequestCh = make(chan struct{}, 1) // Buffer of 1 to allow serviceloop to re-trigger itself.
 	sl.connectionAvailableCh = make(chan net.Conn)
 
 	// NOTE: ping timeout must be less than read/write timeout
@@ -183,7 +183,13 @@ func (sl *SignerListenerEndpoint) serviceLoop() {
 		case <-sl.connectRequestCh:
 			{
 				conn, err := sl.acceptNewConnection()
-				if err == nil {
+				if err != nil {
+					// Retry accepting a connection
+					select {
+					case sl.connectRequestCh <- struct{}{}:
+					default:
+					}
+				} else {
 					sl.Logger.Info("SignerListener: Connected")
 
 					// We have a good connection, wait for someone that needs one otherwise cancellation
@@ -192,11 +198,6 @@ func (sl *SignerListenerEndpoint) serviceLoop() {
 					case <-sl.Quit():
 						return
 					}
-				}
-
-				select {
-				case sl.connectRequestCh <- struct{}{}:
-				default:
 				}
 			}
 		case <-sl.Quit():
